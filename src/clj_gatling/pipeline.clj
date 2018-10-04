@@ -42,20 +42,25 @@
   (println "Starting local executor with id:" node-id)
   (simulation-runner simulation options))
 
+
 (defn prun
   ([f users-by-node requests-by-node]
    (prun f users-by-node requests-by-node nil))
   ([f users-by-node requests-by-node {:keys [parallelism]}]
    (let [parallelism (or parallelism 10)
-         requests-ch (async/to-chan (map vector users-by-node requests-by-node))
-         results-ch (async/chan parallelism)]
-     (<!! (async/pipeline-blocking parallelism
-                                   results-ch
-                                   (map-indexed (fn [idx [users requests]]
-                                                  (f idx users requests)))
-                                   requests-ch
-                                   true))
-     (<!! (async/into [] results-ch)))))
+         promises (vec (repeatedly (count users-by-node) #(promise)))
+         requests-ch (async/to-chan (for [[idx users] (map-indexed vector users-by-node)
+                                          :let [requests (nth requests-by-node idx nil)]]
+                                      [idx users requests]))]
+     (dotimes [_ parallelism]
+       (go-loop []
+         (when-let [[idx users requests] (<! requests-ch)]
+           (let [result (<! (async/thread
+                              (f idx users requests)))
+                 prom (nth promises idx)]
+             (deliver prom result))
+           (recur))))
+     (map deref promises))))
 
 (defn- assoc-if-not-nil [m k v]
   (if v
