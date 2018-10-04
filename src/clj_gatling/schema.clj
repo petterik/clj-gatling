@@ -75,4 +75,5 @@
    (s/optional-key :error-file) s/Str
    (s/optional-key :reporter) s/Any ;Legacy fn
    (s/optional-key :reporters) [Reporter]
+   (s/optional-key :parallelism) s/Int
    })

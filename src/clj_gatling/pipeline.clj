@@ -9,7 +9,7 @@
                                                  split-number-equally]]
             [clojure.set :refer [rename-keys]]
             [clojure.string :as string]
-            [clojure.core.async :refer [thread <!!]]))
+            [clojure.core.async :as async :refer [<!! <! >! go-loop]]))
 
 (defn- init-report-generators [reporters results-dir context]
   (map (fn [{:keys [reporter-key generator]}]
@@ -42,15 +42,20 @@
   (println "Starting local executor with id:" node-id)
   (simulation-runner simulation options))
 
-(defn prun [f users-by-node requests-by-node]
-  (let [results (loop [users-by-node users-by-node
-                       request-by-node requests-by-node
-                       threads []]
-                  (if-let [users (first users-by-node)]
-                    (let [t (thread (f (count threads) users (first requests-by-node)))]
-                      (recur (rest users-by-node) (rest requests-by-node) (conj threads t)))
-                    threads))]
-    (map #(<!! %) results)))
+(defn prun
+  ([f users-by-node requests-by-node]
+   (prun f users-by-node requests-by-node nil))
+  ([f users-by-node requests-by-node {:keys [parallelism]}]
+   (let [parallelism (or parallelism 10)
+         requests-ch (async/to-chan (map vector users-by-node requests-by-node))
+         results-ch (async/chan parallelism)]
+     (<!! (async/pipeline-blocking parallelism
+                                   results-ch
+                                   (map-indexed (fn [idx [users requests]]
+                                                  (f idx users requests)))
+                                   requests-ch
+                                   true))
+     (<!! (async/into [] results-ch)))))
 
 (defn- assoc-if-not-nil [m k v]
   (if v
@@ -80,7 +85,8 @@
                                               (assoc :node-id node-id)
                                               (assoc-if-not-nil :requests requests))))
                               users-by-node
-                              requests-by-node)
+                              requests-by-node
+                              options)
         result (reduce (partial combine-with-reporters report-collectors)
                        results-by-node)
         summary (generate-with-reporters report-generators result)]
